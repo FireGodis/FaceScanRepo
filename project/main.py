@@ -1,10 +1,10 @@
+
 import os
 import cv2
+import sys
 import numpy as np
 import kivy
-
-kivy.require('1.11.1')
-
+from kivy.core.window import Window
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
@@ -13,47 +13,103 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 from kivy.uix.image import Image
-from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.screenmanager import ScreenManager, Screen, WipeTransition
 from kivy.graphics.texture import Texture
 
-# --- Preparação ---
+kivy.require('1.11.1')
+
+
 if not os.path.exists("faces"):
     os.makedirs("faces")
 
 if not os.path.exists("cadastros"):
     os.makedirs("cadastros")
 
-face_classifier = cv2.CascadeClassifier("lib/haarcascade_frontalface_default.xml")
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+cascade_path = resource_path(os.path.join("lib", "haarcascade_frontalface_default.xml"))
+face_cascade = cv2.CascadeClassifier(cascade_path)
+
+if face_cascade.empty():
+    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {cascade_path}")
 
 
-# ------------ Tela de Login ------------
+face_classifier = cv2.CascadeClassifier(cascade_path)
+
+
+if face_classifier.empty():
+    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {cascade_path}")
+
+
+class Theme:
+    PRIMARY_COLOR = [0.1, 0.6, 0.9, 1]       # Azul
+    SECONDARY_COLOR = [0.95, 0.95, 0.95, 1]  # Cinza claro
+    BUTTON_COLOR = [0.2, 0.5, 0.8, 1]        # Azul botão
+    BUTTON_TEXT_COLOR = [1, 1, 1, 1]         # Branco
+    FONT_SIZE_TITLE = 32
+    FONT_SIZE_LABEL = 18
+    FONT_SIZE_INPUT = 16
+
+def styled_label(text, size=None, color=None):
+    return Label(
+        text=text,
+        font_size=size or Theme.FONT_SIZE_LABEL,
+        color=color or Theme.PRIMARY_COLOR
+    )
+
+def styled_input(hint, password=False):
+    return TextInput(
+        hint_text=hint,
+        password=password,
+        font_size=Theme.FONT_SIZE_INPUT,
+        size_hint_y=None,
+        height=40,
+        background_color=Theme.SECONDARY_COLOR,
+        foreground_color=[0,0,0,1],
+        padding=[10,10,10,10],
+        multiline=False
+    )
+
+def styled_button(text, callback):
+    btn = Button(
+        text=text,
+        size_hint_y=None,
+        height=50,
+        background_color=Theme.BUTTON_COLOR,
+        color=Theme.BUTTON_TEXT_COLOR
+    )
+    btn.bind(on_press=callback)
+    return btn
+
+
 class LoginScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        layout = BoxLayout(orientation="vertical", padding=40, spacing=20)
+        layout.add_widget(styled_label("Login", Theme.FONT_SIZE_TITLE, Theme.PRIMARY_COLOR))
 
-        layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
-
-        layout.add_widget(Label(text="Login", font_size=32))
-
-        self.cpf_input = TextInput(hint_text="CPF", size_hint_y=None, height=40)
+        self.cpf_input = styled_input("CPF")
         layout.add_widget(self.cpf_input)
 
-        self.senha_input = TextInput(hint_text="Senha", password=True, size_hint_y=None, height=40)
+        self.senha_input = styled_input("Senha", password=True)
         layout.add_widget(self.senha_input)
 
-        login_btn = Button(text="Login", size_hint_y=None, height=50)
-        login_btn.bind(on_press=self.login_action)
+        login_btn = styled_button("Login", self.login_action)
         layout.add_widget(login_btn)
 
-        self.status_label = Label(text="")
+        self.status_label = styled_label("")
         layout.add_widget(self.status_label)
 
         botoes = BoxLayout(size_hint_y=None, height=50, spacing=10)
-        criar_btn = Button(text="Criar conta")
-        criar_btn.bind(on_press=lambda *_: setattr(self.manager, 'current', 'create_account'))
-        esqueceu_btn = Button(text="Esqueceu a senha?")
-        esqueceu_btn.bind(on_press=lambda *_: setattr(self.manager, 'current', 'reset_request'))
-
+        criar_btn = styled_button("Criar conta", lambda *_: setattr(self.manager, 'current', 'create_account'))
+        esqueceu_btn = styled_button("Esqueceu a senha?", lambda *_: setattr(self.manager, 'current', 'reset_request'))
         botoes.add_widget(criar_btn)
         botoes.add_widget(esqueceu_btn)
         layout.add_widget(botoes)
@@ -77,62 +133,156 @@ class LoginScreen(Screen):
             self.status_label.text = "Senha incorreta."
             return
 
-        # Passou na senha → salvar CPF em uso e ir para reconhecimento
         self.manager.get_screen("recognition").cpf_logado = cpf
         self.manager.current = "recognition"
 
 
-# ------------ Tela Criar Conta ------------
+class FileManagerScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.cpf_logado = None
+        self.current_path = None
+        self.file_editor = None
+        self.editor_text = None
+
+        
+        self.layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
+        self.add_widget(self.layout)
+
+        self.path_label = styled_label("Caminho atual: /")
+        self.layout.add_widget(self.path_label)
+
+        
+        btn_bar = BoxLayout(size_hint_y=None, height=50, spacing=10)
+        btn_bar.add_widget(styled_button("Nova Pasta", self.create_folder))
+        btn_bar.add_widget(styled_button("Novo Arquivo TXT", self.create_file))
+        btn_bar.add_widget(styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'home')))
+        self.layout.add_widget(btn_bar)
+
+       
+        self.files_layout = GridLayout(cols=1, spacing=5)
+        self.layout.add_widget(self.files_layout)
+
+    def on_pre_enter(self, *args):
+       
+        base_dir = os.path.join("pasta_usuarios", self.cpf_logado)
+        os.makedirs(base_dir, exist_ok=True)
+        self.current_path = base_dir
+        self.show_directory(self.current_path)
+
+    def show_directory(self, path):
+        """Atualiza a listagem da pasta atual"""
+        self.files_layout.clear_widgets()
+        self.path_label.text = f"Caminho atual: {os.path.relpath(path, 'pasta_usuarios')}"
+
+        items = sorted(os.listdir(path))
+        for item in items:
+            full_path = os.path.join(path, item)
+            if os.path.isdir(full_path):
+                btn = styled_button(f"📁 {item}", lambda _, p=full_path: self.enter_folder(p))
+            else:
+                btn = styled_button(f"📄 {item}", lambda _, p=full_path: self.open_file(p))
+            self.files_layout.add_widget(btn)
+
+    def enter_folder(self, path):
+        """Entra na pasta"""
+        self.current_path = path
+        self.show_directory(path)
+
+    def create_folder(self, instance):
+        """Cria uma nova pasta dentro da atual"""
+        folder_name = f"NovaPasta_{len(os.listdir(self.current_path))}"
+        new_path = os.path.join(self.current_path, folder_name)
+        os.makedirs(new_path, exist_ok=True)
+        self.show_directory(self.current_path)
+
+    def create_file(self, instance):
+        """Cria um novo arquivo de texto dentro da atual"""
+        file_name = f"NovoArquivo_{len(os.listdir(self.current_path))}.txt"
+        new_file = os.path.join(self.current_path, file_name)
+        with open(new_file, "w", encoding="utf-8") as f:
+            f.write("")  # arquivo vazio
+        self.show_directory(self.current_path)
+
+    def open_file(self, file_path):
+        """Abre o editor de texto simples"""
+        self.layout.clear_widgets()
+        self.file_editor = file_path
+
+        self.layout.add_widget(styled_label(f"Editando: {os.path.basename(file_path)}"))
+
+        
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.editor_text = TextInput(text=content, multiline=True, size_hint_y=0.8)
+        self.layout.add_widget(self.editor_text)
+
+        
+        btns = BoxLayout(size_hint_y=None, height=50, spacing=10)
+        btns.add_widget(styled_button("Salvar", self.save_file))
+        btns.add_widget(styled_button("Voltar", lambda *_: self.refresh_file_manager()))
+        self.layout.add_widget(btns)
+
+    def save_file(self, instance):
+        """Salva o conteúdo editado"""
+        with open(self.file_editor, "w", encoding="utf-8") as f:
+            f.write(self.editor_text.text)
+        self.refresh_file_manager()
+
+    def refresh_file_manager(self):
+        """Recarrega o gerenciador após editar"""
+        self.layout.clear_widgets()
+        self.__init__()  
+        self.cpf_logado = self.manager.get_screen("recognition").cpf_logado
+        self.on_pre_enter()
+
+
 class CreateAccountScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
         main_layout = BoxLayout(orientation="horizontal", padding=20, spacing=10)
 
         # Lado esquerdo (formulário)
         form_layout = GridLayout(cols=1, spacing=10, size_hint=(0.5, 1))
+        form_layout.add_widget(styled_label("Criar Conta", Theme.FONT_SIZE_TITLE))
 
-        form_layout.add_widget(Label(text="Criar Conta", font_size=28))
-
-        self.nome_input = TextInput(hint_text="Nome")
+        self.nome_input = styled_input("Nome")
         form_layout.add_widget(self.nome_input)
 
-        self.cpf_input = TextInput(hint_text="CPF")
+        self.cpf_input = styled_input("CPF")
         form_layout.add_widget(self.cpf_input)
 
-        self.cargo_input = TextInput(hint_text="Cargo")
+        self.cargo_input = styled_input("Cargo")
         form_layout.add_widget(self.cargo_input)
 
-        self.email_input = TextInput(hint_text="Email")
+        self.email_input = styled_input("Email")
         form_layout.add_widget(self.email_input)
 
-        self.senha_input = TextInput(hint_text="Senha", password=True)
+        self.senha_input = styled_input("Senha", password=True)
         form_layout.add_widget(self.senha_input)
 
-        self.progress_label = Label(text="Aguardando captura...")
+        self.progress_label = styled_label("Aguardando captura...")
         form_layout.add_widget(self.progress_label)
 
-        capturar_btn = Button(text="Iniciar Captura de Rosto")
-        capturar_btn.bind(on_press=self.start_capture)
+        capturar_btn = styled_button("Iniciar Captura de Rosto", self.start_capture)
         form_layout.add_widget(capturar_btn)
 
-        salvar_btn = Button(text="Salvar Cadastro")
-        salvar_btn.bind(on_press=self.save_account)
+        salvar_btn = styled_button("Salvar Cadastro", self.save_account)
         form_layout.add_widget(salvar_btn)
 
-        voltar_btn = Button(text="Voltar")
-        voltar_btn.bind(on_press=lambda *_: setattr(self.manager, 'current', 'login'))
+        voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'login'))
         form_layout.add_widget(voltar_btn)
 
         main_layout.add_widget(form_layout)
 
-        # Lado direito (câmera)
+        
         self.camera_widget = Image(size_hint=(0.5, 1))
         main_layout.add_widget(self.camera_widget)
 
         self.add_widget(main_layout)
 
-        # Variáveis
+        
         self.capture = None
         self.frames_captured = 0
         self.capturing = False
@@ -206,23 +356,21 @@ class CreateAccountScreen(Screen):
         self.progress_label.text = "Cadastro salvo com sucesso!"
 
 
-# ------------ Tela de Reconhecimento (Login com Face) ------------
 class RecognitionScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.cpf_logado = None
 
         layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
-        layout.add_widget(Label(text="Reconhecimento Facial", font_size=28))
+        layout.add_widget(styled_label("Reconhecimento Facial", Theme.FONT_SIZE_TITLE))
 
-        self.status_label = Label(text="Posicione seu rosto na câmera...")
+        self.status_label = styled_label("Posicione seu rosto na câmera...")
         layout.add_widget(self.status_label)
 
         self.camera_widget = Image(size_hint=(1, 1))
         layout.add_widget(self.camera_widget)
 
-        voltar_btn = Button(text="Voltar")
-        voltar_btn.bind(on_press=lambda *_: setattr(self.manager, 'current', 'login'))
+        voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'login'))
         layout.add_widget(voltar_btn)
 
         self.add_widget(layout)
@@ -302,42 +450,46 @@ class RecognitionScreen(Screen):
                 else:
                     self.status_label.text = f"Face não reconhecida ({confidence}%)"
 
-
-# ------------ Tela Home ------------
 class HomeScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
-        self.label = Label(text="Login realizado com sucesso!", font_size=28)
+        self.label = styled_label("Login realizado com sucesso!", Theme.FONT_SIZE_TITLE)
         layout.add_widget(self.label)
 
-        logout_btn = Button(text="Deslogar", size_hint=(None, None), size=(120, 40), pos_hint={"right": 1, "top": 1})
-        logout_btn.bind(on_press=lambda *_: setattr(self.manager, 'current', 'login'))
+        abrir_arquivos_btn = styled_button("Abrir Gerenciador de Arquivos", self.abrir_arquivos)
+        layout.add_widget(abrir_arquivos_btn)
+
+        logout_btn = styled_button("Deslogar", lambda *_: setattr(self.manager, 'current', 'login'))
         layout.add_widget(logout_btn)
 
         self.add_widget(layout)
 
+    def abrir_arquivos(self, instance):
+        
+        cpf = self.manager.get_screen("recognition").cpf_logado
+        file_manager_screen = self.manager.get_screen("file_manager")
+        file_manager_screen.cpf_logado = cpf
+        self.manager.current = "file_manager"
 
-# ------------ Tela Reset Senha ------------
+
 class ResetRequestScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
 
-        layout.add_widget(Label(text="Esqueceu a Senha?", font_size=28))
+        layout.add_widget(styled_label("Esqueceu a Senha?", Theme.FONT_SIZE_TITLE))
 
-        self.email_input = TextInput(hint_text="Digite seu Email", size_hint_y=None, height=40)
+        self.email_input = styled_input("Digite seu Email")
         layout.add_widget(self.email_input)
 
-        enviar_btn = Button(text="Enviar Email de Redefinição", size_hint_y=None, height=40)
-        enviar_btn.bind(on_press=self.enviar_email)
+        enviar_btn = styled_button("Enviar Email de Redefinição", self.enviar_email)
         layout.add_widget(enviar_btn)
 
-        self.confirm_label = Label(text="")
+        self.confirm_label = styled_label("")
         layout.add_widget(self.confirm_label)
 
-        voltar_btn = Button(text="Voltar", size_hint_y=None, height=40)
-        voltar_btn.bind(on_press=lambda *_: setattr(self.manager, 'current', 'login'))
+        voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'login'))
         layout.add_widget(voltar_btn)
 
         self.add_widget(layout)
@@ -345,18 +497,19 @@ class ResetRequestScreen(Screen):
     def enviar_email(self, instance):
         self.confirm_label.text = "Email de redefinição enviado!"
 
-
-# ------------ App Principal ------------
 class MyApp(App):
     def build(self):
-        sm = ScreenManager()
+        self.title = "ScanFace"
+        Window.icon = os.path.join(os.path.dirname(__file__), "scanface_ico.ico")
+        print(os.path.exists(os.path.join(os.path.dirname(__file__), "scanface_ico.ico")))
+        sm = ScreenManager(transition=WipeTransition())
         sm.add_widget(LoginScreen(name="login"))
         sm.add_widget(CreateAccountScreen(name="create_account"))
         sm.add_widget(RecognitionScreen(name="recognition"))
         sm.add_widget(HomeScreen(name="home"))
         sm.add_widget(ResetRequestScreen(name="reset_request"))
+        sm.add_widget(FileManagerScreen(name="file_manager"))  # ✅ nova tela
         return sm
-
 
 if __name__ == "__main__":
     MyApp().run()
