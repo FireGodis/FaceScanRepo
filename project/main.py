@@ -15,9 +15,16 @@ from kivy.uix.button import Button
 from kivy.uix.image import Image
 from kivy.uix.screenmanager import ScreenManager, Screen, WipeTransition
 from kivy.graphics.texture import Texture
+from kivy.uix.popup import Popup
+from kivy.uix.filechooser import FileChooserListView
+from kivy.config import Config
+
+
 
 kivy.require('1.11.1')
 
+
+Config.set('input', 'mouse', 'mouse,multitouch_on_demand')
 
 if not os.path.exists("faces"):
     os.makedirs("faces")
@@ -27,25 +34,48 @@ if not os.path.exists("cadastros"):
 
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
-def resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+# Caminho correto para PyInstaller
+if getattr(sys, 'frozen', False):
+    # Executando a partir do .exe
+    base_path = sys._MEIPASS
+else:
+    # Executando no Python normal
+    base_path = os.path.abspath(".")
 
-cascade_path = resource_path(os.path.join("lib", "haarcascade_frontalface_default.xml"))
-face_cascade = cv2.CascadeClassifier(cascade_path)
+haarcascade_path = os.path.join(base_path, "lib", "haarcascade_frontalface_default.xml")
 
-if face_cascade.empty():
-    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {cascade_path}")
-
-
-face_classifier = cv2.CascadeClassifier(cascade_path)
-
-
+face_classifier = cv2.CascadeClassifier(haarcascade_path)
 if face_classifier.empty():
-    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {cascade_path}")
+    raise Exception(f"Erro ao carregar o classificador! Caminho verificado: {haarcascade_path}")
+
+def upload_file(self, instance):
+    import tkinter as tk
+    from tkinter import filedialog
+    import shutil
+
+    # Oculta a janela principal do tkinter
+    root = tk.Tk()
+    root.withdraw()
+
+    # Abre o explorador de arquivos nativo
+    file_path = filedialog.askopenfilename(
+        title="Selecione um arquivo",
+        filetypes=[("Todos os arquivos", "*.*")]
+    )
+
+    if not file_path:
+        return  # usuário cancelou
+
+    # Copia o arquivo selecionado para a pasta atual do gerenciador
+    try:
+        destino = os.path.join(self.current_path, os.path.basename(file_path))
+        shutil.copy(file_path, destino)
+        self.show_directory(self.current_path)
+    except Exception as e:
+        print(f"Erro ao copiar arquivo: {e}")
+
+
+
 
 
 class Theme:
@@ -83,17 +113,37 @@ def styled_button(text, callback):
         size_hint_y=None,
         height=50,
         background_color=Theme.BUTTON_COLOR,
-        color=Theme.BUTTON_TEXT_COLOR
+        color=Theme.BUTTON_TEXT_COLOR,
+        background_normal='',  # remove a imagem de fundo normal
+        background_down='',    # remove o efeito de clique
     )
     btn.bind(on_press=callback)
     return btn
 
 
+class SupportScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        layout = BoxLayout(orientation="vertical", padding=20, spacing=20)
+
+        layout.add_widget(styled_label(
+            "Dificuldades com o login,\nentre em contato no número abaixo para o suporte técnico",
+            Theme.FONT_SIZE_LABEL,
+            Theme.PRIMARY_COLOR
+        ))
+
+        layout.add_widget(styled_label("+55 61991876314", Theme.FONT_SIZE_TITLE, Theme.BUTTON_COLOR))
+
+        voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'recognition'))
+        layout.add_widget(voltar_btn)
+
+        self.add_widget(layout)
+
 class LoginScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation="vertical", padding=40, spacing=20)
-        layout.add_widget(styled_label("Login", Theme.FONT_SIZE_TITLE, Theme.PRIMARY_COLOR))
+        layout.add_widget(styled_label("Scan Face Project", Theme.FONT_SIZE_TITLE, Theme.PRIMARY_COLOR))
 
         self.cpf_input = styled_input("CPF")
         layout.add_widget(self.cpf_input)
@@ -113,6 +163,8 @@ class LoginScreen(Screen):
         botoes.add_widget(criar_btn)
         botoes.add_widget(esqueceu_btn)
         layout.add_widget(botoes)
+
+        
 
         self.add_widget(layout)
 
@@ -137,9 +189,20 @@ class LoginScreen(Screen):
         self.manager.current = "recognition"
 
 
+
 class FileManagerScreen(Screen):
+    def go_to_parent_folder(self, instance):
+        if self.current_path:
+            base_dir = os.path.join("pasta_usuarios", self.cpf_logado)
+            parent = os.path.dirname(self.current_path)
+
+            # Só permite voltar se ainda estivermos dentro da pasta do CPF logado
+            if os.path.commonpath([base_dir, parent]) == base_dir:
+                self.current_path = parent
+                self.show_directory(self.current_path)
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.current_path = os.path.join(os.path.expanduser("~"), "Downloads")
         self.cpf_logado = None
         self.current_path = None
         self.file_editor = None
@@ -156,12 +219,106 @@ class FileManagerScreen(Screen):
         btn_bar = BoxLayout(size_hint_y=None, height=50, spacing=10)
         btn_bar.add_widget(styled_button("Nova Pasta", self.create_folder))
         btn_bar.add_widget(styled_button("Novo Arquivo TXT", self.create_file))
-        btn_bar.add_widget(styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'home')))
+        btn_bar.add_widget(styled_button("Voltar", self.go_to_parent_folder))
+        btn_bar.add_widget(styled_button("Upload Arquivo", lambda inst: upload_file(self, inst)))
+        logout_btn = styled_button("Deslogar", lambda *_: setattr(self.manager, 'current', 'login'))
+        logout_btn.size_hint_x = None
+        logout_btn.width = 100
+        btn_bar.add_widget(logout_btn)
         self.layout.add_widget(btn_bar)
 
        
         self.files_layout = GridLayout(cols=1, spacing=5)
         self.layout.add_widget(self.files_layout)
+
+    # Criar pasta dentro de uma pasta específica
+    def create_folder_in(self, path, parent_popup=None):
+        folder_name = f"NovaPasta_{len(os.listdir(path))}"
+        new_path = os.path.join(path, folder_name)
+        os.makedirs(new_path, exist_ok=True)
+        self.show_directory(self.current_path)
+        if parent_popup:
+            parent_popup.dismiss()
+
+    # Criar arquivo dentro de uma pasta específica
+    def create_file_in(self, path, parent_popup=None):
+        file_name = f"NovoArquivo_{len(os.listdir(path))}.txt"
+        new_file = os.path.join(path, file_name)
+        with open(new_file, "w", encoding="utf-8") as f:
+            f.write("")  # arquivo vazio
+        self.show_directory(self.current_path)
+        if parent_popup:
+            parent_popup.dismiss()
+
+    def rename_file(self, path, parent_popup=None):
+        # Fecha o popup atual, se houver
+        if parent_popup:
+            parent_popup.dismiss()
+
+        # Layout do Popup
+        layout = BoxLayout(orientation='vertical', spacing=10, padding=10)
+
+        # Label informativa
+        layout.add_widget(Label(text=f"Renomear arquivo:\n{os.path.basename(path)}"))
+
+        # Input para o novo nome
+        input_name = TextInput(text=os.path.basename(path), multiline=False)
+        layout.add_widget(input_name)
+
+        # Botão de confirmar
+        def confirm_rename(instance):
+            new_name = input_name.text.strip()
+            if new_name:
+                dir_path = os.path.dirname(path)
+                new_path = os.path.join(dir_path, new_name)
+                try:
+                    os.rename(path, new_path)
+                    self.show_directory(dir_path)  # Atualiza lista de arquivos
+                    popup.dismiss()
+                except Exception as e:
+                    print(f"Erro ao renomear: {e}")
+
+        btn_confirm = Button(text="Renomear", size_hint_y=None, height=40)
+        btn_confirm.bind(on_release=confirm_rename)
+        layout.add_widget(btn_confirm)
+
+        # Criar e abrir Popup
+        popup = Popup(title="Renomear Arquivo", content=layout,
+                    size_hint=(0.6, 0.4), auto_dismiss=True)
+        popup.open()
+
+    def delete_file(self, path, parent_popup=None):
+        import os
+        try:
+            if os.path.isdir(path):
+                os.rmdir(path)  # ou shutil.rmtree(path) se quiser apagar pastas com conteúdo
+            else:
+                os.remove(path)
+            self.show_directory(self.current_path)  # atualiza a lista
+            if parent_popup:
+                parent_popup.dismiss()
+        except Exception as e:
+            print(f"Erro ao deletar: {e}")
+
+    def file_touch(self, instance, touch, path, is_dir=False):
+        if touch.button == 'right' and instance.collide_point(*touch.pos):
+            from kivy.uix.popup import Popup
+            from kivy.uix.boxlayout import BoxLayout
+            layout = BoxLayout(orientation="vertical", spacing=10, padding=10)
+            from kivy.uix.button import Button
+
+            # Se for pasta, adiciona opções extras
+            if is_dir:
+                layout.add_widget(Button(text="Nova Pasta", on_press=lambda *_: self.create_folder_in(path, popup)))
+                layout.add_widget(Button(text="Criar TXT", on_press=lambda *_: self.create_file_in(path, popup)))
+
+            # Opções comuns a arquivos e pastas
+            layout.add_widget(Button(text="Excluir", on_press=lambda *_: self.delete_file(path, popup)))
+            layout.add_widget(Button(text="Renomear", on_press=lambda *_: self.rename_file(path, popup)))
+            
+            popup = Popup(title="Ações", content=layout, size_hint=(0.5, 0.5))
+            popup.open()
+            return True
 
     def on_pre_enter(self, *args):
        
@@ -170,18 +327,35 @@ class FileManagerScreen(Screen):
         self.current_path = base_dir
         self.show_directory(self.current_path)
 
+    def preview_image(self, path):
+        if path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            from kivy.uix.image import Image
+            from kivy.uix.popup import Popup
+            img = Image(source=path)
+            popup = Popup(title=os.path.basename(path), content=img, size_hint=(0.8, 0.8))
+            popup.open()
+
     def show_directory(self, path):
         """Atualiza a listagem da pasta atual"""
         self.files_layout.clear_widgets()
         self.path_label.text = f"Caminho atual: {os.path.relpath(path, 'pasta_usuarios')}"
 
-        items = sorted(os.listdir(path))
-        for item in items:
+        for item in os.listdir(path):
             full_path = os.path.join(path, item)
-            if os.path.isdir(full_path):
-                btn = styled_button(f"📁 {item}", lambda _, p=full_path: self.enter_folder(p))
+            btn = styled_button(item, lambda *_: None)  # Callback vazio por enquanto
+
+            # Bind para clique direito
+            btn.bind(on_touch_down=lambda inst, touch, p=full_path, d=os.path.isdir(full_path): self.file_touch(inst, touch, p, d))
+
+            # Bind para clique esquerdo (abrir)
+            if not os.path.isdir(full_path):
+                if full_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    btn.bind(on_press=lambda _, p=full_path: self.preview_image(p))
+                else:
+                    btn.bind(on_press=lambda _, p=full_path: self.open_file(p))
             else:
-                btn = styled_button(f"📄 {item}", lambda _, p=full_path: self.open_file(p))
+                btn.bind(on_press=lambda _, p=full_path: self.enter_folder(p))
+
             self.files_layout.add_widget(btn)
 
     def enter_folder(self, path):
@@ -247,55 +421,97 @@ class CreateAccountScreen(Screen):
         form_layout = GridLayout(cols=1, spacing=10, size_hint=(0.5, 1))
         form_layout.add_widget(styled_label("Criar Conta", Theme.FONT_SIZE_TITLE))
 
-        self.nome_input = styled_input("Nome")
+        # Campos obrigatórios
+        self.nome_input = styled_input("Nome *")
         form_layout.add_widget(self.nome_input)
 
-        self.cpf_input = styled_input("CPF")
+        self.cpf_input = styled_input("CPF *")
         form_layout.add_widget(self.cpf_input)
 
-        self.cargo_input = styled_input("Cargo")
+        self.cargo_input = styled_input("Cargo *")
         form_layout.add_widget(self.cargo_input)
 
-        self.email_input = styled_input("Email")
+        self.email_input = styled_input("Email *")
         form_layout.add_widget(self.email_input)
 
-        self.senha_input = styled_input("Senha", password=True)
+        self.senha_input = styled_input("Senha *", password=True)
         form_layout.add_widget(self.senha_input)
 
         self.progress_label = styled_label("Aguardando captura...")
         form_layout.add_widget(self.progress_label)
 
-        capturar_btn = styled_button("Iniciar Captura de Rosto", self.start_capture)
-        form_layout.add_widget(capturar_btn)
+        # Botões
+        self.capturar_btn = styled_button("Iniciar Captura de Rosto", self.start_capture)
+        self.capturar_btn.disabled = True  # começa desativado
+        form_layout.add_widget(self.capturar_btn)
 
-        salvar_btn = styled_button("Salvar Cadastro", self.save_account)
-        form_layout.add_widget(salvar_btn)
+        self.salvar_btn = styled_button("Salvar Cadastro", self.save_account)
+        self.salvar_btn.disabled = True  # começa desativado
+        form_layout.add_widget(self.salvar_btn)
 
         voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'login'))
         form_layout.add_widget(voltar_btn)
 
         main_layout.add_widget(form_layout)
 
-        
+        # Lado direito (câmera)
         self.camera_widget = Image(size_hint=(0.5, 1))
         main_layout.add_widget(self.camera_widget)
 
         self.add_widget(main_layout)
 
-        
+        # Inicialização
         self.capture = None
         self.frames_captured = 0
         self.capturing = False
 
+        # Monitorar mudanças no CPF
+        self.cpf_input.bind(text=self.on_cpf_text)
+
+    def on_cpf_text(self, instance, value):
+            # Impedir letras e símbolos
+            digits_only = ''.join(filter(str.isdigit, value))
+            if value != digits_only:
+                instance.text = digits_only
+
+            # Habilitar captura apenas se tiver 12 números
+            if len(digits_only) == 11:
+                self.capturar_btn.disabled = False
+            else:
+                self.capturar_btn.disabled = True
+
+    # Função para mostrar popup explicativo
+    def show_popup(self, message):
+        popup = Popup(
+            title="Ação Indisponível",
+            content=Label(text=message),
+            size_hint=(0.6, 0.3),
+            auto_dismiss=True
+        )
+        popup.open()
     def face_extractor(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = face_classifier.detectMultiScale(gray, 1.3, 5)
         if len(faces) == 0:
             return None
-        for (x, y, w, h) in faces:
+        for (x, y, w, h) in faces: 
             return img[y:y+h, x:x+w]
 
     def start_capture(self, instance):
+        if self.capturar_btn.disabled:
+            self.show_popup("Digite o CPF para habilitar a captura de rosto!")
+            return
+
+        cpf = self.cpf_input.text.strip()
+        cadastro_path = os.path.join("cadastros", f"{cpf}.txt")
+
+        # 🚫 Se já existe um cadastro com esse CPF, bloquear
+        if os.path.exists(cadastro_path):
+            self.show_popup("Já existe uma conta cadastrada com esse CPF!")
+            return
+
+
+        # Restante da função normal
         self.capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         if not self.capture.isOpened():
             self.progress_label.text = "Erro: não foi possível acessar a câmera."
@@ -334,6 +550,7 @@ class CreateAccountScreen(Screen):
                 else:
                     self.progress_label.text = "Análise concluída! Fotos salvas."
                     self.stop_capture()
+                    self.salvar_btn.disabled = False  # habilita o botão de salvar
 
     def stop_capture(self):
         self.capturing = False
@@ -343,9 +560,31 @@ class CreateAccountScreen(Screen):
         Clock.unschedule(self.update_camera)
 
     def save_account(self, instance):
+        if self.salvar_btn.disabled:
+            self.show_popup("Faça a captura da face antes de salvar o cadastro!")
+            return
+
+        campos = [
+            ("Nome", self.nome_input.text),
+            ("CPF", self.cpf_input.text),
+            ("Cargo", self.cargo_input.text),
+            ("Email", self.email_input.text),
+            ("Senha", self.senha_input.text)
+        ]
+        for nome, valor in campos:
+            if not valor.strip():
+                self.show_popup(f"O campo '{nome}' é obrigatório!")
+                return
+
         cpf = self.cpf_input.text.strip()
         filepath = os.path.join("cadastros", f"{cpf}.txt")
 
+        # 🚫 Impedir sobrescrita caso o CPF já exista
+        if os.path.exists(filepath):
+            self.show_popup("Já existe um cadastro com esse CPF! Use outro CPF ou edite o existente.")
+            return
+
+        # Criar o novo cadastro
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(f"Nome:{self.nome_input.text}\n")
             f.write(f"CPF:{cpf}\n")
@@ -354,6 +593,8 @@ class CreateAccountScreen(Screen):
             f.write(f"Senha:{self.senha_input.text}\n")
 
         self.progress_label.text = "Cadastro salvo com sucesso!"
+
+
 
 
 class RecognitionScreen(Screen):
@@ -370,8 +611,13 @@ class RecognitionScreen(Screen):
         self.camera_widget = Image(size_hint=(1, 1))
         layout.add_widget(self.camera_widget)
 
+        # Barra inferior com Voltar e Suporte
+        bottom_bar = BoxLayout(size_hint_y=None, height=50, spacing=10)
         voltar_btn = styled_button("Voltar", lambda *_: setattr(self.manager, 'current', 'login'))
-        layout.add_widget(voltar_btn)
+        suporte_btn = styled_button("Suporte", lambda *_: setattr(self.manager, 'current', 'suport'))
+        bottom_bar.add_widget(voltar_btn)
+        bottom_bar.add_widget(suporte_btn)
+        layout.add_widget(bottom_bar)
 
         self.add_widget(layout)
 
@@ -445,10 +691,14 @@ class RecognitionScreen(Screen):
                 result = self.model.predict(roi)
                 confidence = int(100 * (1 - (result[1]) / 300))
 
-                if confidence > 75:
-                    self.manager.current = "home"
-                else:
-                    self.status_label.text = f"Face não reconhecida ({confidence}%)"
+            label, confidence = self.model.predict(roi)
+            # LBPH retorna "distância" — quanto menor, melhor.
+            # Então vamos inverter a lógica corretamente:
+            if confidence < 55:  # quanto MENOR, mais parecido
+                self.status_label.text = "Rosto reconhecido com alta confiança."
+                self.manager.current = "home"
+            else:
+                self.status_label.text = f"Face não reconhecida (confiança {confidence:.2f} % Improvável.)"
 
 class HomeScreen(Screen):
     def __init__(self, **kwargs):
@@ -507,6 +757,7 @@ class MyApp(App):
         sm.add_widget(CreateAccountScreen(name="create_account"))
         sm.add_widget(RecognitionScreen(name="recognition"))
         sm.add_widget(HomeScreen(name="home"))
+        sm.add_widget(SupportScreen(name = "suport"))
         sm.add_widget(ResetRequestScreen(name="reset_request"))
         sm.add_widget(FileManagerScreen(name="file_manager"))  # ✅ nova tela
         return sm
