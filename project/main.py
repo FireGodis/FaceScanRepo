@@ -9,6 +9,7 @@ from kivy.app import App
 from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
@@ -454,9 +455,20 @@ class CreateAccountScreen(Screen):
 
         main_layout.add_widget(form_layout)
 
+        # Canto superior direito → botão "Trocar de câmera"
+        camera_container = FloatLayout(size_hint=(0.5, 1))
+        self.camera_widget = Image(size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
+        camera_container.add_widget(self.camera_widget)
+        
+
+        trocar_camera_btn = styled_button("Trocar de câmera", self.trocar_camera)
+        trocar_camera_btn.size_hint = (0.35, 0.1)
+        trocar_camera_btn.pos_hint = {"right": 0.98, "top": 0.98}
+        camera_container.add_widget(trocar_camera_btn)
+
         # Lado direito (câmera)
-        self.camera_widget = Image(size_hint=(0.5, 1))
-        main_layout.add_widget(self.camera_widget)
+        
+        main_layout.add_widget(camera_container)
 
         self.add_widget(main_layout)
 
@@ -467,6 +479,47 @@ class CreateAccountScreen(Screen):
 
         # Monitorar mudanças no CPF
         self.cpf_input.bind(text=self.on_cpf_text)
+
+    # ==========================
+    # Função para trocar câmeras
+    # ==========================
+    def trocar_camera(self, instance):
+        available_cameras = []
+        for i in range(5):  # tenta detectar até 5 câmeras conectadas
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                available_cameras.append(i)
+                cap.release()
+
+        if not available_cameras:
+            self.show_popup("Nenhuma câmera detectada.")
+            return
+
+        # Cria popup para seleção de câmera
+        layout = GridLayout(cols=1, spacing=10, padding=10)
+        for index in available_cameras:
+            btn = styled_button(f"Câmera {index}", lambda _, i=index: self.select_camera(i))
+            layout.add_widget(btn)
+
+        popup = Popup(
+            title="Selecionar Câmera",
+            content=layout,
+            size_hint=(0.5, 0.5),
+            auto_dismiss=True
+        )
+        self.camera_popup = popup
+        popup.open()
+
+    def select_camera(self, index):
+        self.camera_index = index
+        if hasattr(self, "camera_popup"):
+            self.camera_popup.dismiss()
+
+        self.progress_label.text = f"Câmera {index} selecionada!"
+        if self.capture:
+            self.capture.release()
+            camera_index = getattr(self, "camera_index", 0)  # usa o índice selecionado ou 0
+            self.capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
 
     def on_cpf_text(self, instance, value):
             # Impedir letras e símbolos
@@ -512,7 +565,8 @@ class CreateAccountScreen(Screen):
 
 
         # Restante da função normal
-        self.capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        camera_index = getattr(self, "camera_index", 0)  # usa o índice selecionado ou 0
+        self.capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
         if not self.capture.isOpened():
             self.progress_label.text = "Erro: não foi possível acessar a câmera."
             return
@@ -601,8 +655,15 @@ class RecognitionScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.cpf_logado = None
+        self.current_camera_index = 0  # índice da câmera atual
 
         layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
+        # 🔹 Top bar com botão de trocar câmera
+        top_bar = BoxLayout(size_hint_y=None, height=40, spacing=10)
+        trocar_camera_btn = styled_button("Trocar de Câmera", self.show_camera_selection)
+        top_bar.add_widget(trocar_camera_btn)
+        layout.add_widget(top_bar)
+
         layout.add_widget(styled_label("Reconhecimento Facial", Theme.FONT_SIZE_TITLE))
 
         self.status_label = styled_label("Posicione seu rosto na câmera...")
@@ -625,13 +686,71 @@ class RecognitionScreen(Screen):
         self.capture = None
         self.event = None
 
+    # 🔸 Detectar todas as câmeras disponíveis
+    def list_available_cameras(self):
+        index = 0
+        available = []
+        while True:
+            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                break
+            available.append(index)
+            cap.release()
+            index += 1
+        return available
+
+    # 🔸 Mostrar popup para escolher câmera
+    def show_camera_selection(self, instance):
+        available = self.list_available_cameras()
+        if not available:
+            self.status_label.text = "Nenhuma câmera detectada."
+            return
+
+        layout = GridLayout(cols=1, spacing=10, padding=10)
+        for idx in available:
+            btn = styled_button(f"Câmera {idx}", lambda _, i=idx: self.change_camera(i))
+            layout.add_widget(btn)
+
+        popup = Popup(
+            title="Selecionar Câmera",
+            content=layout,
+            size_hint=(0.5, 0.5),
+            auto_dismiss=True
+        )
+        popup.open()
+        self.popup_camera = popup
+
+    # 🔸 Trocar a câmera em tempo real
+    def change_camera(self, index):
+        self.current_camera_index = index
+        self.status_label.text = f"Câmera {index} selecionada."
+        if hasattr(self, "popup_camera"):
+            self.popup_camera.dismiss()
+        self.restart_camera()
+
+    def restart_camera(self):
+        # Para captura atual
+        if self.event:
+            Clock.unschedule(self.event)
+            self.event = None
+        if self.capture:
+            self.capture.release()
+
+        # Inicia nova câmera
+        self.capture = cv2.VideoCapture(self.current_camera_index, cv2.CAP_DSHOW)
+        if not self.capture.isOpened():
+            self.status_label.text = f"Erro: não foi possível acessar a câmera {self.current_camera_index}"
+            return
+        self.event = Clock.schedule_interval(self.update_camera, 1.0 / 30.0)
+
     def on_enter(self, *args):
         cpf = self.cpf_logado
         if not cpf:
             self.status_label.text = "Erro: Nenhum CPF em uso."
             return
 
-        self.capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        camera_index = getattr(self, "camera_index", 0)  # usa o índice selecionado ou 0
+        self.capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
         if not self.capture.isOpened():
             self.status_label.text = "Erro: não foi possível acessar a câmera"
             return
